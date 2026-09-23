@@ -1,3 +1,9 @@
+# Python dependencies installed with pip.
 pykeepass>=4.0.0
 requests>=2.32.0
-python-dotenv>=1.0.0
+
+# Required command-line tools, installed separately:
+# - age with post-quantum identity support: age-keygen -pq
+# - OpenSSL CLI with P-256/ECDSA support: openssl
+# - Bitwarden CLI for Vaultwarden import/export: bw
+# - KeePassXC CLI for KeePass-to-Vaultwarden import: keepassxc-cli

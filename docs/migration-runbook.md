@@ -24,28 +24,42 @@ ec9e6800-30a1-416e-8611-b2c5389a52dc
 - `scripts/mirror_keepass_to_vaultwarden.py` — exporter, dry-run validator, encrypted import wrapper, and attachment/history synchronizer
 - `docs/strongbox-migration-plan.md` — original migration design
 - `requirements.txt` — Python dependencies
-- `sample.env` — configuration template
+- `sample.config.json` — configuration template
 - `.gitignore` — excludes credentials, exports, virtual environments, and KDBX files
 
 ## Configuration
 
-Create `.env` in the repository root. Do not commit it.
+Create `config.json` in the repository root. Do not commit it.
 
-```env
-KEEPASS_PATH=./nerdhirn.kdbx
-KEEPASS_PASSWORD='the KeePass master password'
-KEEPASS_KEY_FILE=
-VAULTWARDEN_URL=https://vault.risk-mermaid.ts.net
-VAULTWARDEN_ORGANIZATION_NAME=nerdhirn
-VAULTWARDEN_ORGANIZATION_ID=ec9e6800-30a1-416e-8611-b2c5389a52dc
-OUTPUT_DIR=exports
-BW_CLI=/Users/willjasen/.nvm/versions/node/v20.19.1/bin/bw
+```json
+{
+  "global": {
+    "mode": "",
+    "vaultwarden_url": "",
+    "vaultwarden_master_password": "",
+    "output_dir": "",
+    "temp_dir": "",
+    "log_dir": "",
+    "key_dir": ""
+  },
+  "keepass_databases": [
+    {
+      "keepass_path": "",
+      "keepass_password": "",
+      "keepass_key_file": "",
+      "vaultwarden_organization_name": ""
+    }
+  ]
+}
 ```
+
+`output_dir` is only used for final Vaultwarden-to-KeePass `.kdbx` backups.
+KeePass-to-Vaultwarden staging uses `temp_dir`.
 
 The Vaultwarden OAuth token is useful for API checks, but the actual encrypted
 import uses the Bitwarden CLI account session. Keep the Vaultwarden account
-master password out of shell history and do not source `.env` when passwords
-contain shell-special characters.
+master password out of shell history.
+Every configured database in a single command uses `global.mode` as the selected direction.
 
 ## Initial validation
 
@@ -60,7 +74,7 @@ Run a dry-run:
 
 ```bash
 .venv/bin/python scripts/mirror_keepass_to_vaultwarden.py \
-  --env-file .env \
+  --config-file config.json \
   --db ./nerdhirn.kdbx \
   --dry-run
 ```
@@ -105,9 +119,8 @@ bw list organizations --raw
 Run the encrypted import:
 
 ```bash
-BW_CLI="/Users/willjasen/.nvm/versions/node/v20.19.1/bin/bw" \
 .venv/bin/python scripts/mirror_keepass_to_vaultwarden.py \
-  --env-file .env \
+  --config-file config.json \
   --db ./nerdhirn.kdbx \
   --bw-cli
 ```
@@ -118,7 +131,9 @@ The script performs this transformation:
 KDBX -> KeePass XML -> bw import keepass2xml -> Vaultwarden organization
 ```
 
-The temporary XML file is deleted after the import command finishes.
+Temporary XML and JSON staging data is written under `temp_dir` as signed
+age-encrypted artifacts. Verified plaintext is streamed to external CLIs through
+permission-restricted named pipes, whose contents are never stored on disk.
 
 ## Attachments and history preservation
 
@@ -126,10 +141,9 @@ The standard KeePass XML importer imported current item fields but did not
 preserve KeePass revisions or binary attachments. The second pass handles both:
 
 ```bash
-BW_CLI="/Users/willjasen/.nvm/versions/node/v20.19.1/bin/bw" \
 BITWARDENCLI_APPDATA_DIR=/tmp/nerdhirn-bw-cli \
 .venv/bin/python scripts/mirror_keepass_to_vaultwarden.py \
-  --env-file .env \
+  --config-file config.json \
   --db ./nerdhirn.kdbx \
   --bw-attachments
 ```
@@ -153,7 +167,7 @@ Use the Bitwarden CLI to inspect the organization:
 ```bash
 bw sync
 bw list items \
-  --organizationid "$VAULTWARDEN_ORGANIZATION_ID" \
+  --organizationid "ec9e6800-30a1-416e-8611-b2c5389a52dc" \
   --raw
 ```
 
@@ -166,25 +180,24 @@ The final verification found:
 
 ## Security and operational notes
 
-- Keep `.env`, `.kdbx`, XML exports, JSON exports, and CLI session keys private.
-- Do not use `source .env` when a secret contains shell syntax unless every value
-  is safely quoted.
+- Keep `config.json`, `.kdbx`, XML exports, JSON exports, and CLI session keys private.
+- Delete raw Vaultwarden JSON exports before the process exits; they contain decrypted Vaultwarden secrets.
 - Keep the original KDBX backup until the Vaultwarden data has been reviewed.
 - The history JSON files contain historical passwords and must be treated as
   highly sensitive.
 - The script refuses the old plaintext direct-API import path.
 - For additional KeePass databases, perform one organization import per
-  database and use a distinct `VAULTWARDEN_ORGANIZATION_ID`.
+  database and use a distinct `vaultwarden_organization_id`.
 
   ## Personal-vault import
 
   To import a database into the account's personal vault, leave
-  `VAULTWARDEN_ORGANIZATION_ID` unset. The same encrypted importer is used, but
+  `vaultwarden_organization_id` unset. The same encrypted importer is used, but
   the CLI command omits `--organizationid`:
 
   ```bash
   .venv/bin/python scripts/mirror_keepass_to_vaultwarden.py \
-    --env-file .env \
+    --config-file config.json \
     --db ./willjasen.kdbx \
     --bw-cli
   ```

@@ -1,0 +1,28 @@
+{
+  "global": {
+    "mode": "",
+    "vaultwarden_url": "",
+    "vaultwarden_api_key": "",
+    "vaultwarden_client_id": "",
+    "vaultwarden_client_secret": "",
+    "vaultwarden_email": "",
+    "vaultwarden_master_password": "",
+    "output_dir": "",
+    "log_dir": "",
+    "temp_dir": "",
+    "key_dir": ""
+  },
+  "keepass_databases": [
+    {
+      "keepass_path": "",
+      "keepass_password": "",
+      "keepass_key_file": "",
+      "vaultwarden_organization_name": ""
+    },
+    {
+      "keepass_path": "",
+      "keepass_password": "",
+      "keepass_key_file": ""
+    }
+  ]
+}
