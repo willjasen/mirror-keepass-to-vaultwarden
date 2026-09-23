@@ -1,6 +1,6 @@
 # mirror-keepass-to-vaultwarden
 
-a small proof-of-concept project for testing a strongbox/keepass export -> vaultwarden mirror while preserving item history and attachments as much as the target api allows.
+a small proof-of-concept project for testing a strongbox/keepass export -> vaultwarden mirror while preserving item history and attachments as much as the target api allows. functionality to mirror from vaultwarden to keepass has also been added.
 
 i was able to successfully import two keepass databases into vaultwarden, retaining attachments and history from keepass.
 
@@ -18,7 +18,7 @@ the conversion from keepass to vaultwarden happens by extracting details from th
 - the completed workflow and verification details in `docs/migration-runbook.md`
 - a script in `scripts/mirror_keepass_to_vaultwarden.py` that can:
   - inspect one or many `.kdbx` databases
-  - export them to JSON for validation
+  - stage JSON validation data under `temp/` as signed age-encrypted artifacts
   - summarize counts, attachments, history, and OTP entries
   - optionally attempt a dry-run mirror into a Vaultwarden org or personal vault
 
@@ -34,20 +34,73 @@ the conversion from keepass to vaultwarden happens by extracting details from th
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install -r requirements.txt
-cp sample.env .env
+install -m 600 sample.config.json config.json
 ```
 
-Then fill in your `.env` values or pass CLI flags directly.
+Also install the command-line tools listed in `requirements.txt`: `age` with
+`age-keygen -pq` support, `openssl`, `bw`, and `keepassxc-cli`.
+
+Then fill in your `config.json` values or pass CLI flags directly. Shared
+Vaultwarden settings live under `global`; each entry in `keepass_databases`
+defines one KeePass database or Vaultwarden backup target. A single run always
+uses `global.mode` as the direction for every configured database. Use
+`vaultwarden_to_keepass` to back up Vaultwarden into KeePass, or
+`keepass_to_vaultwarden` for KeePass-to-Vaultwarden work.
+Each run writes a JSON-lines log under `logs/`; temporary raw exports and
+downloaded attachments are staged under `temp/` as age-encrypted files using a
+fresh post-quantum age identity kept only in memory for that run. Both folders
+are ignored by git.
+The script requires `config.json` to be a regular file and sets it to owner-only
+permissions (`0600`) when loading it so other local users cannot read its
+credentials.
+On first run, the script also creates a repo-local P-256 signing keypair under
+`keys/` and ignores it in git. Each encrypted temp artifact and its plaintext
+bytes are signed and verified before use.
+
+See [ENCRYPTION.md](ENCRYPTION.md) for the age identity lifecycle, encrypted
+staging, named-pipe handoffs, and data-at-rest boundaries. See
+[SIGNING.md](SIGNING.md) for the P-256 key lifecycle, generated signatures,
+verification order, and intended security properties.
+
+## Temp data security
+
+Sensitive intermediate data is not intentionally stored on disk in plaintext.
+Vaultwarden JSON exports, downloaded Vaultwarden attachments, KeePass validation
+JSON, KeePass XML exports, KeePass attachments, and generated history archives
+are staged in `temp/` as `.age` files.
+
+For every run, the script generates a fresh post-quantum age identity with
+`age-keygen -pq`. The private identity is kept in memory only and is discarded
+when the run exits. Temporary sensitive payloads are encrypted and signed before
+being written under `temp/`.
+
+Some external tools require a file path, such as `bw import` or
+`bw create attachment`. In those cases, the script decrypts the signed artifact
+only after verification and streams the plaintext to the CLI through a
+permission-restricted named pipe. The pipe stores no file content on disk.
+The encrypted temp tree is removed at the end of the run.
+Finished Vaultwarden-to-KeePass backups are moved to `exports/`;
+KeePass-to-Vaultwarden work uses `temp/` only for intermediate data.
+
+`config.json` is persistent configuration rather than a temporary artifact. It
+is not age-encrypted because the application must be able to read it on a later
+run without retaining a decryption identity. It is ignored by git, must be a
+regular file, and is forced to owner-only `0600` permissions when loaded. Final
+`.kdbx` files use KeePass database encryption rather than age.
+
+Vaultwarden connections require HTTPS and a certificate trusted by the local
+system. Plain HTTP and invalid or untrusted certificates are rejected before a
+Vaultwarden operation begins.
 
 ## Example dry-run for a single database
 
 ```bash
 python scripts/mirror_keepass_to_vaultwarden.py \
   --db /path/to/nerdhirn.kdbx \
-  --password "$KEEPASS_PASSWORD" \
+  --password "the KeePass master password" \
   --org-name nerdhirn \
   --vault-url https://vault.risk-mermaid.ts.net \
-  --api-key "$VAULTWARDEN_API_KEY" \
+  --api-key "the Vaultwarden API key" \
   --dry-run
 ```
 
@@ -59,7 +112,8 @@ python scripts/mirror_keepass_to_vaultwarden.py \
   --dry-run
 ```
 
-This does not write to Vaultwarden during `--dry-run`; it exports the JSON and prints the planned item mapping.
+This does not write to Vaultwarden during `--dry-run`; transient validation JSON
+is staged under `temp/` as signed age-encrypted data, then removed after the run.
 
 ## Live encrypted import
 
@@ -72,7 +126,7 @@ bw login --apikey
 bw unlock --raw
 
 .venv/bin/python scripts/mirror_keepass_to_vaultwarden.py \
-  --env-file .env \
+  --config-file config.json \
   --db ./nerdhirn.kdbx \
   --bw-cli
 ```
@@ -86,6 +140,37 @@ not stored in the repository. For a noninteractive shell, export it explicitly:
 export BITWARDENCLI_APPDATA_DIR=/tmp/nerdhirn-bw-cli
 export BW_SESSION="$(bw unlock --raw)"
 ```
+
+## Reverse backup from Vaultwarden to KeePass
+
+Use the same `config.json` file, then run the reverse backup mode. If
+`vaultwarden_master_password` is not set in JSON, unlock the Bitwarden CLI first
+with `export BW_SESSION="$(bw unlock --raw)"`.
+
+```bash
+bw config server https://vault.risk-mermaid.ts.net
+
+.venv/bin/python scripts/mirror_keepass_to_vaultwarden.py \
+  --config-file config.json \
+  --vaultwarden-to-keepass
+```
+
+By default this creates a temporary timestamped Vaultwarden JSON export and
+downloads attachments under `temp/`; those temp files are age-encrypted on disk.
+It then decrypts them in memory while writing an encrypted KeePass backup named
+after the Vaultwarden source, moves the finished KDBX to `exports/`, then
+deletes the temp files before exiting. Organization exports use the organization name,
+for example `exports/nerdhirn-20260923-143012.kdbx`. Personal vault exports use
+a safe slug of `vaultwarden_username` or `vaultwarden_email`, so an email address
+like `will@example.com` becomes a filesystem-safe name. Set
+`keepass_backup_path` on a database entry or pass `--backup-db` to choose the
+base KDBX path. The backup database is encrypted with `keepass_password`.
+
+For an organization export, set `vaultwarden_organization_name`, and optionally
+set `vaultwarden_organization_id` to avoid lookup. For a personal vault export,
+leave the organization fields empty and set `vaultwarden_username` or
+`global.vaultwarden_email`.
+For a quick count without creating the KDBX, add `--dry-run`.
 
 ## Notes
 
