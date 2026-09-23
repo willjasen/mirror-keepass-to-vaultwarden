@@ -1,0 +1,8 @@
+.venv/
+.env
+exports/
+__pycache__/
+*.pyc
+.DS_Store
+*.kdbx
+*.kdb
