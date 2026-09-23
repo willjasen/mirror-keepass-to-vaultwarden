@@ -6,7 +6,7 @@ i was able to successfully import two keepass databases into vaultwarden, retain
 
 to retain history from keepass, the project cannot create historical entries directly in vaultwarden, so the history of each entry (if there is history) is attached as a "keepass-history.json" to their respective entries in vaultwarden.
 
-the conversion from keepass to vaultwarden warden happens by extracting details from the keepass database into xml, then importing the xml into vaultwarden. two passes are made with this, one for entries as they are currently and one for their history.
+the conversion from keepass to vaultwarden happens by extracting details from the keepass database into xml, then importing the xml into vaultwarden. two passes are made with this, one for entries as they are currently and one for their history.
 
 ---
 
