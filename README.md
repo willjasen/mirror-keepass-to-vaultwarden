@@ -1,6 +1,6 @@
 # mirror-keepass-to-vaultwarden
 
-a small proof-of-concept project for testing a strongbox/keePass export -> vaultwarden mirror while preserving item history and attachments as much as the target api allows.
+a small proof-of-concept project for testing a strongbox/keepass export -> vaultwarden mirror while preserving item history and attachments as much as the target api allows.
 
 i was able to successfully import two keepass databases into vaultwarden, retaining attachments and history from keepass.
 
