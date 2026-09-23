@@ -40,8 +40,9 @@ are not backups and are not intended to be decrypted after the run completes.
 ## External CLI handoffs
 
 The Bitwarden CLI requires a path for KeePass XML imports and attachment
-uploads. After an artifact's signatures are verified, the application decrypts
-it in memory and streams it to the CLI through a named pipe.
+uploads. After an artifact's ciphertext signature is verified, the application
+decrypts and authenticates it in memory and streams it to the CLI through a
+named pipe.
 
 Each pipe is created inside a random `0700` directory with `0600` permissions.
 A named pipe has a filesystem name but stores no payload content on disk. The
@@ -71,6 +72,18 @@ the application performs a TLS connection using the operating system's trusted
 certificate authorities. Plain HTTP, malformed URLs, expired certificates, and
 untrusted certificates are rejected.
 
+The requested URL is also bound to Bitwarden CLI operations. After attempting
+to configure the CLI, the application reads `bw status` and compares its
+`serverUrl` with `vaultwarden_url`, allowing only insignificant normalization
+such as a trailing slash or the default HTTPS port. Imports, exports, attachment
+downloads, and attachment uploads stop if the URL is missing, cannot be
+verified, or points to a different server. This prevents an existing CLI login
+from silently sending secrets to, or reading secrets from, a stale server.
+
+Attachment synchronization is a live mutation. `--bw-attachments --dry-run` is
+rejected before configuration, KeePass access, or upload. Normal dry runs may
+create encrypted validation artifacts, but do not write to Vaultwarden.
+
 ## Cleanup
 
 Run-specific directories are removed when processing finishes. Cleanup reduces
@@ -78,5 +91,6 @@ residual encrypted artifacts, but confidentiality does not depend on cleanup:
 temporary payload content is age-encrypted at rest and the per-run private
 identity is not retained.
 
-Encryption protects confidentiality and age also authenticates its ciphertext.
-The additional signing layer is documented in [SIGNING.md](SIGNING.md).
+Age protects confidentiality and authenticates the encrypted payload during
+decryption. The additional ciphertext-signing layer is documented in
+[SIGNING.md](SIGNING.md).

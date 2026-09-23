@@ -54,8 +54,8 @@ The script requires `config.json` to be a regular file and sets it to owner-only
 permissions (`0600`) when loading it so other local users cannot read its
 credentials.
 On first run, the script also creates a repo-local P-256 signing keypair under
-`keys/` and ignores it in git. Each encrypted temp artifact and its plaintext
-bytes are signed and verified before use.
+`keys/` and ignores it in git. Each encrypted temp artifact is signed and
+verified before use; age authenticates the plaintext during decryption.
 
 See [ENCRYPTION.md](ENCRYPTION.md) for the age identity lifecycle, encrypted
 staging, named-pipe handoffs, and data-at-rest boundaries. See
@@ -90,7 +90,11 @@ regular file, and is forced to owner-only `0600` permissions when loaded. Final
 
 Vaultwarden connections require HTTPS and a certificate trusted by the local
 system. Plain HTTP and invalid or untrusted certificates are rejected before a
-Vaultwarden operation begins.
+Vaultwarden operation begins. Before any Bitwarden CLI import, export, download,
+or attachment upload, the script also compares the configured `vaultwarden_url`
+with the CLI's `serverUrl`. A missing or different server stops the run. If the
+CLI is logged in to another server, log out, configure the intended server, and
+log in again before retrying.
 
 ## Example dry-run for a single database
 
@@ -114,6 +118,8 @@ python scripts/mirror_keepass_to_vaultwarden.py \
 
 This does not write to Vaultwarden during `--dry-run`; transient validation JSON
 is staged under `temp/` as signed age-encrypted data, then removed after the run.
+The mutation-only `--bw-cli` and `--bw-attachments` workflows cannot be combined
+with `--dry-run`; those combinations stop before importing or uploading data.
 
 ## Live encrypted import
 
@@ -133,8 +139,10 @@ bw unlock --raw
 
 The script exports the KDBX through `keepassxc-cli` and immediately passes the
 XML to `bw import keepass2xml --organizationid ...`. Vaultwarden receives the
-Bitwarden-encrypted records; no plaintext cipher POST is used. The CLI session key is intentionally
-not stored in the repository. For a noninteractive shell, export it explicitly:
+Bitwarden-encrypted records; no plaintext cipher POST is used. Before the
+handoff, the script confirms that `bw status` reports the same server as
+`vaultwarden_url`. The CLI session key is intentionally not stored in the
+repository. For a noninteractive shell, export it explicitly:
 
 ```bash
 export BITWARDENCLI_APPDATA_DIR=/tmp/nerdhirn-bw-cli

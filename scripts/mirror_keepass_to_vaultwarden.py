@@ -114,6 +114,16 @@ def validate_vaultwarden_url(url: str | None) -> None:
         raise SystemExit(f"Could not securely connect to vaultwarden_url: {exc}") from exc
 
 
+def normalized_server_url(url: str) -> str:
+    parsed = urlparse(url)
+    default_port = 443 if parsed.scheme.lower() == "https" else None
+    port = parsed.port
+    authority = (parsed.hostname or "").lower()
+    if port and port != default_port:
+        authority = f"{authority}:{port}"
+    return f"{parsed.scheme.lower()}://{authority}{parsed.path.rstrip('/')}"
+
+
 def global_config(config: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(config.get("global"), dict):
         return config["global"]
@@ -415,7 +425,7 @@ def import_with_bitwarden_cli(
             "Bitwarden CLI not found. Install it, configure the Vaultwarden server, "
             "unlock it interactively, then rerun with --bw-cli."
         )
-    validate_vaultwarden_url(vaultwarden_url)
+    configure_bitwarden_server(vaultwarden_url, cli=cli)
 
     timestamp = export_timestamp()
     run_temp_dir = temp_dir / f"keepass-import-{slugify(db_path.stem)}-{timestamp}"
@@ -645,24 +655,6 @@ def ensure_signing_keypair(key_dir: Path) -> Dict[str, Path]:
     return {"private_key": private_key, "public_key": public_key}
 
 
-def sign_bytes(data: bytes, signature_path: Path, private_key: Path) -> None:
-    signature_path.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        ["openssl", "dgst", "-sha256", "-sign", str(private_key), "-out", str(signature_path)],
-        input=data,
-        check=True,
-    )
-
-
-def verify_bytes_signature(data: bytes, signature_path: Path, public_key: Path) -> None:
-    subprocess.run(
-        ["openssl", "dgst", "-sha256", "-verify", str(public_key), "-signature", str(signature_path)],
-        input=data,
-        check=True,
-        capture_output=True,
-    )
-
-
 def sign_file(path: Path, signature_path: Path, private_key: Path) -> None:
     signature_path.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
@@ -682,15 +674,11 @@ def verify_file_signature(path: Path, signature_path: Path, public_key: Path) ->
 def sign_and_verify_temp_artifact(
     *,
     encrypted_path: Path,
-    plaintext: bytes,
     private_key: Path,
     public_key: Path,
 ) -> None:
-    plaintext_signature = encrypted_path.with_suffix(encrypted_path.suffix + ".plaintext.sig")
     encrypted_signature = encrypted_path.with_suffix(encrypted_path.suffix + ".sig")
-    sign_bytes(plaintext, plaintext_signature, private_key)
     sign_file(encrypted_path, encrypted_signature, private_key)
-    verify_bytes_signature(plaintext, plaintext_signature, public_key)
     verify_file_signature(encrypted_path, encrypted_signature, public_key)
 
 
@@ -714,7 +702,6 @@ def write_secure_temp_artifact(
     encrypt_bytes(plaintext, encrypted_path, age_recipient)
     sign_and_verify_temp_artifact(
         encrypted_path=encrypted_path,
-        plaintext=plaintext,
         private_key=signing_keys["private_key"],
         public_key=signing_keys["public_key"],
     )
@@ -732,7 +719,6 @@ def write_secure_command_output(
     plaintext = decrypt_age_file(encrypted_path, age_identity)
     sign_and_verify_temp_artifact(
         encrypted_path=encrypted_path,
-        plaintext=plaintext,
         private_key=signing_keys["private_key"],
         public_key=signing_keys["public_key"],
     )
@@ -746,11 +732,8 @@ def read_secure_temp_artifact(
     signing_keys: Dict[str, Path],
 ) -> bytes:
     encrypted_signature = encrypted_path.with_suffix(encrypted_path.suffix + ".sig")
-    plaintext_signature = encrypted_path.with_suffix(encrypted_path.suffix + ".plaintext.sig")
     verify_file_signature(encrypted_path, encrypted_signature, signing_keys["public_key"])
-    plaintext = decrypt_age_file(encrypted_path, age_identity)
-    verify_bytes_signature(plaintext, plaintext_signature, signing_keys["public_key"])
-    return plaintext
+    return decrypt_age_file(encrypted_path, age_identity)
 
 
 def export_vaultwarden_json(
@@ -846,7 +829,7 @@ def resolve_bitwarden_cli_org_id(
 
 def configure_bitwarden_server(url: str | None, cli: str = "bw") -> None:
     if not url:
-        return
+        raise SystemExit("vaultwarden_url is required for Bitwarden CLI operations.")
     validate_vaultwarden_url(url)
     result = subprocess.run(
         [cli, "config", "server", url],
@@ -854,17 +837,23 @@ def configure_bitwarden_server(url: str | None, cli: str = "bw") -> None:
         text=True,
         env=os.environ.copy(),
     )
-    if result.returncode == 0:
-        return
     output = f"{result.stdout}\n{result.stderr}"
-    if "Logout required before server config update" in output:
-        return
-    raise subprocess.CalledProcessError(
-        result.returncode,
-        result.args,
-        output=result.stdout,
-        stderr=result.stderr,
+    if result.returncode != 0 and "Logout required before server config update" not in output:
+        raise subprocess.CalledProcessError(
+            result.returncode, result.args, output=result.stdout, stderr=result.stderr
+        )
+    status = subprocess.run(
+        [cli, "status"], check=True, capture_output=True, text=True, env=os.environ.copy()
     )
+    try:
+        active_url = json.loads(status.stdout).get("serverUrl")
+    except (json.JSONDecodeError, AttributeError) as exc:
+        raise SystemExit("Could not verify the Bitwarden CLI server URL.") from exc
+    if not active_url or normalized_server_url(str(active_url)) != normalized_server_url(url):
+        raise SystemExit(
+            f"Bitwarden CLI is configured for {active_url or 'an unknown server'}, "
+            f"not {url}. Log out, configure the requested server, and log in again."
+        )
 
 
 def ensure_group(kp: PyKeePass, groups_by_path: Dict[str, Any], group_path: str) -> Any:
@@ -1245,6 +1234,7 @@ def attach_preserved_data(
     organization_id: str,
     temp_dir: Path,
     key_dir: Path,
+    vaultwarden_url: str,
     cli: str = "bw",
 ) -> Dict[str, int]:
     """Attach KeePass binaries and revision archives to already-imported items."""
@@ -1252,6 +1242,7 @@ def attach_preserved_data(
         raise SystemExit("Bitwarden CLI not found.")
     if not os.getenv("BW_SESSION"):
         raise SystemExit("Export BW_SESSION=\"$(bw unlock --raw)\" before attaching data.")
+    configure_bitwarden_server(vaultwarden_url, cli=cli)
 
     source = PyKeePass(str(db_path), password=keepass_password)
     age_material = generate_age_identity()
@@ -1431,6 +1422,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.bw_attachments and args.dry_run:
+        raise SystemExit("--bw-attachments cannot be combined with --dry-run.")
+
     config = load_config_file(args.config_file)
     globals_ = global_config(config)
     databases = configured_databases(config)
@@ -1564,6 +1558,7 @@ def main() -> None:
                 args.org_id or database_value(database, globals_, "vaultwarden_organization_id"),
                 temp_dir=temp_dir,
                 key_dir=key_dir,
+                vaultwarden_url=args.vault_url or "",
                 cli=bw_cli,
             )
             result["database"] = database_paths[0].stem

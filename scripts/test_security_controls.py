@@ -101,10 +101,44 @@ def test_config_permissions() -> None:
             raise AssertionError("configuration symlink was accepted")
 
 
+def test_bitwarden_server_must_match() -> None:
+    configured = Mock(returncode=1, stdout="", stderr="Logout required before server config update")
+    matching = Mock(stdout=json.dumps({"serverUrl": "https://vault.example.test/"}))
+    with patch.object(mirror, "validate_vaultwarden_url"), patch.object(
+        mirror.subprocess, "run", side_effect=[configured, matching]
+    ):
+        mirror.configure_bitwarden_server("https://vault.example.test")
+
+    mismatched = Mock(stdout=json.dumps({"serverUrl": "https://wrong.example.test"}))
+    with patch.object(mirror, "validate_vaultwarden_url"), patch.object(
+        mirror.subprocess, "run", side_effect=[configured, mismatched]
+    ):
+        try:
+            mirror.configure_bitwarden_server("https://vault.example.test")
+        except SystemExit as exc:
+            if "wrong.example.test" not in str(exc):
+                raise AssertionError(f"unexpected server mismatch error: {exc}") from exc
+        else:
+            raise AssertionError("mismatched Bitwarden server was accepted")
+
+
+def test_attachment_dry_run_is_rejected() -> None:
+    with patch.object(sys, "argv", ["mirror", "--bw-attachments", "--dry-run"]):
+        try:
+            mirror.main()
+        except SystemExit as exc:
+            if "cannot be combined" not in str(exc):
+                raise AssertionError(f"unexpected dry-run error: {exc}") from exc
+        else:
+            raise AssertionError("attachment upload was allowed during dry-run")
+
+
 def main() -> None:
     test_fifo_handoff_blocks_path_traversal()
     test_https_validation()
     test_config_permissions()
+    test_bitwarden_server_must_match()
+    test_attachment_dry_run_is_rejected()
     print(json.dumps({"security_controls": "passed"}))
 
 

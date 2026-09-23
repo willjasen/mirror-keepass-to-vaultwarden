@@ -48,8 +48,8 @@ def main() -> None:
             raise AssertionError("encrypted manifest contains plaintext attachment name")
         if not encrypted_path.with_suffix(encrypted_path.suffix + ".sig").exists():
             raise AssertionError("encrypted artifact signature was not written")
-        if not encrypted_path.with_suffix(encrypted_path.suffix + ".plaintext.sig").exists():
-            raise AssertionError("plaintext signature was not written")
+        if encrypted_path.with_suffix(encrypted_path.suffix + ".plaintext.sig").exists():
+            raise AssertionError("plaintext signature leaks a password-guessing oracle")
     print("age temp encryption test passed")
 
 

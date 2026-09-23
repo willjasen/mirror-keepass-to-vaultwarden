@@ -27,31 +27,34 @@ run will generate a new device keypair.
 
 ## Signatures created
 
-For every temporary encrypted artifact, the application creates two SHA-256
-ECDSA signatures:
+For every temporary encrypted artifact, the application creates one SHA-256
+ECDSA signature:
 
 ```text
 artifact.age
 artifact.age.sig
-artifact.age.plaintext.sig
 ```
 
-`artifact.age.sig` signs the exact encrypted file bytes. The plaintext
-signature signs the in-memory bytes that existed immediately before encryption.
-The plaintext itself is not stored with that signature.
+`artifact.age.sig` signs the exact encrypted file bytes. Plaintext signatures
+are deliberately not created because a public signature over secret material
+would let someone test guesses without possessing the age identity.
+
+Older versions also created `artifact.age.plaintext.sig`. Current runs neither
+create nor require that file. Run-specific temporary directories are removed at
+the end of processing, so legacy temporary signatures should not be retained.
 
 ## Verification order
 
 Before temporary data is used, the application:
 
 1. verifies `artifact.age.sig` against the encrypted artifact
-2. decrypts the artifact in memory with the current run's age identity
-3. verifies the decrypted bytes against `artifact.age.plaintext.sig`
-4. parses the data, writes it into the encrypted KeePass database, or streams it
+2. decrypts and authenticates the age artifact in memory with the current run's
+   identity
+3. parses the data, writes it into the encrypted KeePass database, or streams it
    to an external CLI through a named pipe
 
-A failed OpenSSL verification stops the operation. This checks both the staged
-ciphertext and the plaintext crossing the conversion boundary.
+A failed OpenSSL verification stops the operation. Age's authenticated
+encryption detects modification when the artifact is decrypted.
 
 ## Security boundary
 
